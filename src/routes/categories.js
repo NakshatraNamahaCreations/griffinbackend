@@ -1,6 +1,6 @@
 const express = require('express');
 const router  = express.Router();
-const { readDB } = require('../db');
+const { Product } = require('../db');
 
 const CATEGORIES = [
   { id: 'Apparel',                 label: 'Apparel',               icon: 'shirt' },
@@ -13,17 +13,22 @@ const CATEGORIES = [
   { id: 'Kitchen Appliances',      label: 'Kitchen Appliances',    icon: 'layers' },
   { id: 'Rewards and Recognition', label: 'Rewards & Recognition', icon: 'award' },
   { id: 'Workspace Essentials',    label: 'Workspace Essentials',  icon: 'briefcase' },
+  { id: 'Luggage',                 label: 'Luggage',               icon: 'briefcase' },
 ];
 
-// GET /api/categories — list all categories with product counts
-router.get('/', (req, res) => {
-  const { products } = readDB();
-  const withCounts = CATEGORIES.map(cat => ({
-    ...cat,
-    count: products.filter(p => p.category === cat.id && p.visible).length,
-    total: products.filter(p => p.category === cat.id).length,
-  }));
-  res.json({ categories: withCounts });
+// GET /api/categories
+router.get('/', async (req, res) => {
+  try {
+    const products = await Product.find({}, { category: 1, visible: 1 }).lean();
+    const withCounts = CATEGORIES.map(cat => ({
+      ...cat,
+      count: products.filter(p => p.category === cat.id && p.visible).length,
+      total: products.filter(p => p.category === cat.id).length,
+    }));
+    res.json({ categories: withCounts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

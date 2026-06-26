@@ -1,231 +1,221 @@
 const express = require('express');
 const router  = express.Router();
 const auth    = require('../middleware/auth');
-const { readDB, writeDB } = require('../db');
+const { Product } = require('../db');
 
 // ── GET /api/products ─────────────────────────────────────────────
-// Public — the website reads products from here
-// Query params: ?category=Drinkware  ?search=mug  ?visible=true  ?page=1&limit=50
-router.get('/', (req, res) => {
-  const { category, search, visible, page, limit } = req.query;
-  let { products } = readDB();
+router.get('/', async (req, res) => {
+  try {
+    const { category, search, visible, page, limit } = req.query;
+    const filter = {};
 
-  // Filter visible (website always passes visible=true)
-  if (visible === 'true')  products = products.filter(p => p.visible);
-  if (visible === 'false') products = products.filter(p => !p.visible);
+    if (visible === 'true')  filter.visible = true;
+    if (visible === 'false') filter.visible = false;
+    if (category) filter.category = { $regex: new RegExp(`^${category}$`, 'i') };
+    if (search) {
+      const q = new RegExp(search, 'i');
+      filter.$or = [{ name: q }, { category: q }, { desc: q }, { sku: q }];
+    }
 
-  // Filter by category
-  if (category) products = products.filter(p =>
-    p.category.toLowerCase() === category.toLowerCase()
-  );
+    const total = await Product.countDocuments(filter);
 
-  // Search
-  if (search) {
-    const q = search.toLowerCase();
-    products = products.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      p.category.toLowerCase().includes(q) ||
-      (p.desc  && p.desc.toLowerCase().includes(q)) ||
-      (p.sku   && p.sku.toLowerCase().includes(q))
-    );
+    let query = Product.find(filter).sort({ id: 1 });
+    if (page && limit) {
+      const p = parseInt(page) || 1;
+      const l = parseInt(limit) || 50;
+      query = query.skip((p - 1) * l).limit(l);
+      const products = await query.lean();
+      return res.json({ products, total, page: p, limit: l, pages: Math.ceil(total / l) });
+    }
+
+    const products = await query.lean();
+    res.json({ products, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  // Pagination
-  const total = products.length;
-  if (page && limit) {
-    const p = parseInt(page) || 1;
-    const l = parseInt(limit) || 50;
-    products = products.slice((p - 1) * l, p * l);
-    return res.json({ products, total, page: p, limit: l, pages: Math.ceil(total / l) });
-  }
-
-  res.json({ products, total });
-});
-
-// ── GET /api/products/:id ─────────────────────────────────────────
-router.get('/:id', (req, res) => {
-  const { products } = readDB();
-  const product = products.find(p => p.id === parseInt(req.params.id));
-  if (!product) return res.status(404).json({ error: 'Product not found' });
-  res.json({ product });
-});
-
-// ── POST /api/products ────────────────────────────────────────────
-// Protected — admin only
-router.post('/', auth, (req, res) => {
-  const { name, category, img, imgData, desc, price, sku, visible } = req.body;
-
-  if (!name || !name.trim())
-    return res.status(400).json({ error: 'Product name is required' });
-  if (!category || !category.trim())
-    return res.status(400).json({ error: 'Category is required' });
-
-  const db = readDB();
-  const newProduct = {
-    id:       db.nextId++,
-    name:     name.trim(),
-    category: category.trim(),
-    img:      img     || '',
-    imgData:  imgData || null,
-    desc:     desc    || '',
-    price:    price   || '',
-    sku:      sku     || '',
-    visible:  visible !== false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  db.products.push(newProduct);
-  writeDB(db);
-
-  res.status(201).json({ success: true, product: newProduct });
-});
-
-// ── PUT /api/products/:id ─────────────────────────────────────────
-// Protected — admin only
-router.put('/:id', auth, (req, res) => {
-  const db = readDB();
-  const idx = db.products.findIndex(p => p.id === parseInt(req.params.id));
-  if (idx === -1) return res.status(404).json({ error: 'Product not found' });
-
-  const { name, category, img, imgData, desc, price, sku, visible } = req.body;
-
-  if (name !== undefined && !name.trim())
-    return res.status(400).json({ error: 'Product name cannot be empty' });
-
-  const existing = db.products[idx];
-  db.products[idx] = {
-    ...existing,
-    name:      name     !== undefined ? name.trim()     : existing.name,
-    category:  category !== undefined ? category.trim() : existing.category,
-    img:       img      !== undefined ? img             : existing.img,
-    imgData:   imgData  !== undefined ? imgData         : existing.imgData,
-    desc:      desc     !== undefined ? desc            : existing.desc,
-    price:     price    !== undefined ? price           : existing.price,
-    sku:       sku      !== undefined ? sku             : existing.sku,
-    visible:   visible  !== undefined ? visible         : existing.visible,
-    updatedAt: new Date().toISOString(),
-  };
-
-  writeDB(db);
-  res.json({ success: true, product: db.products[idx] });
-});
-
-// ── PATCH /api/products/:id/visibility ───────────────────────────
-// Toggle visible on/off
-router.patch('/:id/visibility', auth, (req, res) => {
-  const db = readDB();
-  const idx = db.products.findIndex(p => p.id === parseInt(req.params.id));
-  if (idx === -1) return res.status(404).json({ error: 'Product not found' });
-
-  db.products[idx].visible   = !db.products[idx].visible;
-  db.products[idx].updatedAt = new Date().toISOString();
-  writeDB(db);
-
-  res.json({ success: true, visible: db.products[idx].visible });
-});
-
-// ── DELETE /api/products/:id ──────────────────────────────────────
-router.delete('/:id', auth, (req, res) => {
-  const db = readDB();
-  const idx = db.products.findIndex(p => p.id === parseInt(req.params.id));
-  if (idx === -1) return res.status(404).json({ error: 'Product not found' });
-
-  db.products.splice(idx, 1);
-  writeDB(db);
-
-  res.json({ success: true, message: 'Product deleted' });
-});
-
-// ── POST /api/products/bulk/import ───────────────────────────────
-// Bulk import — used on first run when DB is empty
-router.post('/bulk/import', auth, (req, res) => {
-  const { products: incoming } = req.body;
-  if (!Array.isArray(incoming))
-    return res.status(400).json({ error: 'products must be an array' });
-
-  const db = readDB();
-
-  // Only import if DB is empty (first-time migration)
-  if (db.products.length > 0)
-    return res.status(409).json({ error: 'Products already exist. Use /bulk/sync to add missing products.' });
-
-  let nextId = db.nextId || 1;
-  db.products = incoming.map(p => ({
-    id:        nextId++,
-    name:      p.name      || '',
-    category:  p.category  || '',
-    img:       p.img       || '',
-    imgData:   p.imgData   || null,
-    desc:      p.desc      || '',
-    price:     p.price     || '',
-    sku:       p.sku       || '',
-    visible:   p.visible   !== false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }));
-  db.nextId = nextId;
-  writeDB(db);
-
-  res.status(201).json({ success: true, imported: db.products.length });
-});
-
-// ── POST /api/products/bulk/sync ──────────────────────────────────
-// Sync — adds only products that don't already exist (by category+img)
-// Safe to run multiple times — never duplicates, never deletes
-router.post('/bulk/sync', auth, (req, res) => {
-  const { products: incoming } = req.body;
-  if (!Array.isArray(incoming))
-    return res.status(400).json({ error: 'products must be an array' });
-
-  const db = readDB();
-
-  // Build a set of existing category+img combos
-  const existing = new Set(db.products.map(p => `${p.category}|||${p.img}`));
-
-  let added = 0;
-  let nextId = db.nextId || (db.products.length + 1);
-
-  for (const p of incoming) {
-    const key = `${p.category}|||${p.img}`;
-    if (existing.has(key)) continue; // already in DB — skip
-
-    db.products.push({
-      id:        nextId++,
-      name:      p.name      || '',
-      category:  p.category  || '',
-      img:       p.img       || '',
-      imgData:   p.imgData   || null,
-      desc:      p.desc      || '',
-      price:     p.price     || '',
-      sku:       p.sku       || '',
-      visible:   p.visible   !== false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    existing.add(key);
-    added++;
-  }
-
-  db.nextId = nextId;
-  writeDB(db);
-
-  res.status(201).json({ success: true, added, total: db.products.length });
 });
 
 // ── GET /api/products/stats/summary ──────────────────────────────
-router.get('/stats/summary', auth, (req, res) => {
-  const { products } = readDB();
-  const summary = {
-    total:   products.length,
-    visible: products.filter(p => p.visible).length,
-    hidden:  products.filter(p => !p.visible).length,
-    byCategory: {},
-  };
-  products.forEach(p => {
-    summary.byCategory[p.category] = (summary.byCategory[p.category] || 0) + 1;
-  });
-  res.json(summary);
+router.get('/stats/summary', auth, async (req, res) => {
+  try {
+    const products = await Product.find().lean();
+    const summary = {
+      total:      products.length,
+      visible:    products.filter(p => p.visible).length,
+      hidden:     products.filter(p => !p.visible).length,
+      byCategory: {},
+    };
+    products.forEach(p => {
+      summary.byCategory[p.category] = (summary.byCategory[p.category] || 0) + 1;
+    });
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/products/:id ─────────────────────────────────────────
+router.get('/:id', async (req, res) => {
+  try {
+    const product = await Product.findOne({ id: parseInt(req.params.id) }).lean();
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json({ product });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products ────────────────────────────────────────────
+router.post('/', auth, async (req, res) => {
+  try {
+    const { name, category, img, imgData, desc, price, sku, visible } = req.body;
+    if (!name || !name.trim())     return res.status(400).json({ error: 'Product name is required' });
+    if (!category || !category.trim()) return res.status(400).json({ error: 'Category is required' });
+
+    const last = await Product.findOne().sort({ id: -1 }).lean();
+    const nextId = last ? last.id + 1 : 1;
+
+    const product = await Product.create({
+      id:        nextId,
+      name:      name.trim(),
+      category:  category.trim(),
+      img:       img     || '',
+      imgData:   imgData || null,
+      desc:      desc    || '',
+      price:     price   || '',
+      sku:       sku     || '',
+      visible:   visible !== false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.status(201).json({ success: true, product });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /api/products/:id ─────────────────────────────────────────
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const product = await Product.findOne({ id: parseInt(req.params.id) });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const { name, category, img, imgData, desc, price, sku, visible } = req.body;
+    if (name !== undefined && !name.trim()) return res.status(400).json({ error: 'Product name cannot be empty' });
+
+    if (name      !== undefined) product.name      = name.trim();
+    if (category  !== undefined) product.category  = category.trim();
+    if (img       !== undefined) product.img       = img;
+    if (imgData   !== undefined) product.imgData   = imgData;
+    if (desc      !== undefined) product.desc      = desc;
+    if (price     !== undefined) product.price     = price;
+    if (sku       !== undefined) product.sku       = sku;
+    if (visible   !== undefined) product.visible   = visible;
+    product.updatedAt = new Date().toISOString();
+
+    await product.save();
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /api/products/:id/visibility ───────────────────────────
+router.patch('/:id/visibility', auth, async (req, res) => {
+  try {
+    const product = await Product.findOne({ id: parseInt(req.params.id) });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    product.visible   = !product.visible;
+    product.updatedAt = new Date().toISOString();
+    await product.save();
+
+    res.json({ success: true, visible: product.visible });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/products/:id ──────────────────────────────────────
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const result = await Product.deleteOne({ id: parseInt(req.params.id) });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json({ success: true, message: 'Product deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/bulk/import ───────────────────────────────
+router.post('/bulk/import', auth, async (req, res) => {
+  try {
+    const { products: incoming } = req.body;
+    if (!Array.isArray(incoming)) return res.status(400).json({ error: 'products must be an array' });
+
+    const count = await Product.countDocuments();
+    if (count > 0) return res.status(409).json({ error: 'Products already exist. Use /bulk/sync instead.' });
+
+    const docs = incoming.map((p, i) => ({
+      id:        i + 1,
+      name:      p.name     || '',
+      category:  p.category || '',
+      img:       p.img      || '',
+      imgData:   p.imgData  || null,
+      desc:      p.desc     || '',
+      price:     p.price    || '',
+      sku:       p.sku      || '',
+      visible:   p.visible  !== false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+
+    await Product.insertMany(docs);
+    res.status(201).json({ success: true, imported: docs.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/bulk/sync ──────────────────────────────────
+router.post('/bulk/sync', auth, async (req, res) => {
+  try {
+    const { products: incoming } = req.body;
+    if (!Array.isArray(incoming)) return res.status(400).json({ error: 'products must be an array' });
+
+    const existing = await Product.find({}, { category: 1, img: 1 }).lean();
+    const existingKeys = new Set(existing.map(p => `${p.category}|||${p.img}`));
+
+    const last = await Product.findOne().sort({ id: -1 }).lean();
+    let nextId = last ? last.id + 1 : 1;
+
+    const toAdd = [];
+    for (const p of incoming) {
+      const key = `${p.category}|||${p.img}`;
+      if (existingKeys.has(key)) continue;
+      toAdd.push({
+        id:        nextId++,
+        name:      p.name     || '',
+        category:  p.category || '',
+        img:       p.img      || '',
+        imgData:   p.imgData  || null,
+        desc:      p.desc     || '',
+        price:     p.price    || '',
+        sku:       p.sku      || '',
+        visible:   p.visible  !== false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      existingKeys.add(key);
+    }
+
+    if (toAdd.length > 0) await Product.insertMany(toAdd);
+    const total = await Product.countDocuments();
+    res.status(201).json({ success: true, added: toAdd.length, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

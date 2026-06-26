@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 
+const { connectDB } = require('./db');
 const authRoutes     = require('./routes/auth');
 const productRoutes  = require('./routes/products');
 const uploadRoutes   = require('./routes/upload');
@@ -59,10 +60,10 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+connectDB().then(() => app.listen(PORT, () => {
   console.log(`\n🚀 Griffin Admin Backend running on http://localhost:${PORT}`);
   console.log(`📦 Products API  → http://localhost:${PORT}/api/products`);
   console.log(`🔐 Auth API      → http://localhost:${PORT}/api/auth/login`);
   console.log(`📁 Upload API    → http://localhost:${PORT}/api/upload`);
   console.log(`❤️  Health check  → http://localhost:${PORT}/api/health\n`);
-});
+})).catch(err => { console.error('Failed to connect to MongoDB:', err); process.exit(1); });

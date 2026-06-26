@@ -1,27 +1,25 @@
-const fs   = require('fs');
-const path = require('path');
+const mongoose = require('mongoose');
 
-const DATA_DIR  = path.join(__dirname, '../data');
-const DATA_FILE = path.join(DATA_DIR, 'products.json');
+const productSchema = new mongoose.Schema({
+  id:        { type: Number, unique: true },
+  name:      { type: String, required: true },
+  category:  { type: String, required: true },
+  img:       { type: String, default: '' },
+  imgData:   { type: String, default: null },
+  desc:      { type: String, default: '' },
+  price:     { type: String, default: '' },
+  sku:       { type: String, default: '' },
+  visible:   { type: Boolean, default: true },
+  createdAt: { type: String },
+  updatedAt: { type: String },
+});
 
-// Ensure data directory and file exist
-function ensureFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ products: [], nextId: 1 }, null, 2));
-  }
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
+
+async function connectDB() {
+  if (mongoose.connection.readyState >= 1) return;
+  await mongoose.connect(process.env.MONGO_URI);
+  console.log('MongoDB connected');
 }
 
-function readDB() {
-  ensureFile();
-  const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-  return JSON.parse(raw);
-}
-
-function writeDB(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-module.exports = { readDB, writeDB };
+module.exports = { connectDB, Product };
