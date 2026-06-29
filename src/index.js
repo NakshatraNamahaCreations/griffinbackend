@@ -36,6 +36,8 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Serve uploaded images statically
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Serve catalog images statically
+app.use('/catalog', express.static(path.join(__dirname, '../Catalog Images')));
 
 // ── Routes ──────────────────────────────────────────────────────
 app.use('/api/auth',       authRoutes);
